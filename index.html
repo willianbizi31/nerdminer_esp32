@@ -153,15 +153,46 @@
       if (!Number.isNaN(hr) && hr > 0) setStatus("ok", "Online (minerando)");
       else setStatus("warn", "Dados recebidos (hashrate 0?)");
 
-      renderDetails(data);
-    }catch(e){
-      setStatus("bad", "Falha ao buscar dados");
-      els.details.innerHTML = `<span class="small">Erro: ${e.message}. Se isso for CORS, use o proxy (abaixo).</span>`;
-      els.hashrate.textContent = "—";
-      els.lastseen.textContent = "—";
-      els.bestdiff.textContent = "—";
-      els.uptime.textContent = "—";
+     function renderDetails(data){
+  els.details.innerHTML = "";
+
+  if (data.workers) {
+    const workers = data.workers;
+
+    for (const id in workers) {
+      const w = workers[id];
+
+      const div = document.createElement("div");
+      div.className = "pill";
+      div.innerHTML = `
+        Worker: <b>${id}</b>
+        | Hashrate: <b>${w.hashrate ?? 0} KH/s</b>
+        | Shares: <b>${w.shares ?? 0}</b>
+        | Uptime: <b>${w.uptime ?? "-"}</b>
+      `;
+
+      els.details.appendChild(div);
+
+      if (w.hashrate) {
+        els.hashrate.textContent = w.hashrate + " KH/s";
+      }
+
+      if (w.lastSeen) {
+        els.lastseen.textContent = w.lastSeen;
+      }
+
+      if (w.uptime) {
+        els.uptime.textContent = w.uptime;
+      }
     }
+
+    setStatus("ok", "Minerando");
+  } else {
+    els.details.innerHTML = "Nenhum worker encontrado.";
+    setStatus("warn", "Sem workers ativos");
+  }
+}
+
   }
 
   // contador visual
