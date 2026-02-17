@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>NerdMiner Dashboard</title>
+  <title>NerdMiner Dashboard v1</title>
   <style>
     :root{
       --bg:#0b1220;--card:#111b2e;--text:#e9eefc;--muted:#a9b3cf;
       --ok:#39d98a;--bad:#ff5c5c;--warn:#ffcc00;
       --btn:#1b2a47;--pill:rgba(255,255,255,.06);
+      --accent:#7aa6ff;
     }
     body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
-    .wrap{max-width:1020px;margin:0 auto;padding:18px}
+    .wrap{max-width:1050px;margin:0 auto;padding:18px}
     h1{font-size:24px;margin:0 0 8px}
     .sub{color:var(--muted);font-size:13px;margin-bottom:14px;word-break:break-all}
     .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
@@ -33,6 +34,11 @@
     .item .title{font-weight:750}
     .cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:8px}
     @media(min-width:860px){.cols{grid-template-columns:repeat(4,minmax(0,1fr))}}
+    .hero{border:1px solid rgba(122,166,255,.25);background:linear-gradient(180deg, rgba(122,166,255,.12), rgba(255,255,255,.02));}
+    .hero .v{font-size:26px}
+    .tag{display:inline-flex;align-items:center;gap:6px;margin-top:8px;color:var(--muted);font-size:12px}
+    a{color:var(--accent);text-decoration:none}
+    a:hover{text-decoration:underline}
   </style>
 </head>
 <body>
@@ -46,18 +52,31 @@
       <button id="refresh">Atualizar agora</button>
     </div>
 
+    <!-- Destaque -->
     <div class="grid" style="margin-top:12px">
-      <div class="card"><div class="k">Hashrate</div><div class="v" id="hashrate">—</div></div>
-      <div class="card"><div class="k">Last seen</div><div class="v" id="lastseen">—</div></div>
+      <div class="card hero">
+        <div class="k">Valid blocks</div>
+        <div class="v" id="validBlocks">N/D</div>
+        <div class="tag">⚠️ A API do pool (client) não fornece esse campo.</div>
+      </div>
+
+      <div class="card"><div class="k">Hashrate (atual)</div><div class="v" id="hashrate">—</div></div>
+      <div class="card"><div class="k">Avg hashrate (sessão)</div><div class="v" id="avgHashrate">—</div></div>
+      <div class="card"><div class="k">Tempo minerando (sessão)</div><div class="v" id="uptime">—</div></div>
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div class="card"><div class="k">Total MHashes (estimado)</div><div class="v" id="mhashes">—</div></div>
       <div class="card"><div class="k">Best difficulty</div><div class="v" id="bestdiff">—</div></div>
-      <div class="card"><div class="k">Uptime (sessão)</div><div class="v" id="uptime">—</div></div>
+      <div class="card"><div class="k">Last seen</div><div class="v" id="lastseen">—</div></div>
+      <div class="card"><div class="k">Sessões/Workers</div><div class="v" id="workersCount">—</div></div>
     </div>
 
     <div class="card" style="margin-top:12px">
       <div class="k">Workers / Sessões</div>
       <div id="workersWrap" class="list"></div>
       <div class="footer">
-        Dica: se “Last seen” começar a subir (ex: 2 min ago), seu ESP32 caiu ou perdeu Wi-Fi.
+        “Online” aqui = last seen nos últimos <b>120s</b>. Se subir para “2 min ago”, o ESP32 caiu/perdeu Wi-Fi.
       </div>
     </div>
   </div>
@@ -65,13 +84,7 @@
 <script>
   // === CONFIG ===
   const WALLET = "bc1q26ewxzrujkhz8tyazxtxdlcu4amduam6xgl78v";
-
-  // API direta do Public Pool (foi a que você capturou no Network)
-  const DIRECT_API = `https://public-pool.io:40557/api/client/${WALLET}`;
-
-  // Se um dia precisar de proxy (CORS), troque por algo assim:
-  // const API = `https://SEU-DOMINIO.com/pproxy.php?wallet=${encodeURIComponent(WALLET)}`;
-  const API = DIRECT_API;
+  const API = `https://public-pool.io:40557/api/client/${WALLET}`;
 
   document.getElementById("wallet").textContent = WALLET;
 
@@ -79,10 +92,14 @@
     dot: document.getElementById("dot"),
     status: document.getElementById("status"),
     tick: document.getElementById("tick"),
+    validBlocks: document.getElementById("validBlocks"),
     hashrate: document.getElementById("hashrate"),
-    lastseen: document.getElementById("lastseen"),
-    bestdiff: document.getElementById("bestdiff"),
+    avgHashrate: document.getElementById("avgHashrate"),
     uptime: document.getElementById("uptime"),
+    mhashes: document.getElementById("mhashes"),
+    bestdiff: document.getElementById("bestdiff"),
+    lastseen: document.getElementById("lastseen"),
+    workersCount: document.getElementById("workersCount"),
     workersWrap: document.getElementById("workersWrap"),
   };
 
@@ -91,104 +108,71 @@
     els.status.textContent = text;
   }
 
-  function fmtNum(n){
-    if (n === null || n === undefined) return "—";
-    const x = Number(n);
-    if (Number.isNaN(x)) return String(n);
-    return x.toLocaleString("pt-BR");
+  function toNum(x){
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
   }
 
-  function pick(obj, keys){
-    for (const k of keys){
-      if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
-    }
-    return undefined;
+  // API retorna hashRate em H/s (string)
+  function formatHashrateFromHs(hs){
+    const n = toNum(hs);
+    if (n === null) return "—";
+
+    const khs = n / 1000;
+    if (khs < 1000) return `${khs.toFixed(1)} KH/s`;
+
+    const mhs = khs / 1000;
+    return `${mhs.toFixed(2)} MH/s`;
   }
 
-  function looksOnlineFromLastSeen(lastSeen){
-    if (!lastSeen) return false;
-    const s = String(lastSeen).toLowerCase();
-    return s.includes("just now") || s.includes("agora") || s.includes("sec") || s.includes("seg");
+  function hsToKhsNumber(hs){
+    const n = toNum(hs);
+    if (n === null) return null;
+    return n / 1000;
   }
 
-  // Converte um possível objeto worker (campos variam) em algo exibível
-  function normalizeWorker(id, w){
-    const hashrate = pick(w, ["hashrate","hashRate","khs","kh_s","hashrate_khs"]);
-    const shares   = pick(w, ["shares","validShares","completedShares","acceptedShares","shares32","shares_32"]);
-    const uptime   = pick(w, ["uptime","uptimeHuman","timeMining","time_mining","sessionUptime"]);
-    const lastSeen = pick(w, ["lastSeen","last_seen","lastSeenHuman","last_seen_human","seen","last"]);
-
-    return { id, hashrate, shares, uptime, lastSeen, raw:w };
+  function msToHms(ms){
+    if (!Number.isFinite(ms) || ms < 0) return "—";
+    const s = Math.floor(ms/1000);
+    const h = Math.floor(s/3600);
+    const m = Math.floor((s%3600)/60);
+    const sec = s%60;
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
   }
 
-  function renderWorkers(data){
-    els.workersWrap.innerHTML = "";
+  function parseIso(iso){
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? t : null;
+  }
 
-    // Alguns formatos possíveis:
-    // 1) data.workers = { "sessionId": { ... }, ... }
-    // 2) data.workers = [ { ... }, ... ]
-    // 3) data.client / data.miner etc.
-    const workersObj = pick(data, ["workers","worker","clients","miners"]);
+  function relativeFromIso(iso){
+    const t = parseIso(iso);
+    if (t === null) return "—";
+    const diff = Date.now() - t;
+    const s = Math.floor(diff/1000);
+    if (s < 0) return "—";
+    if (s < 10) return "agora";
+    if (s < 60) return `${s}s atrás`;
+    const m = Math.floor(s/60);
+    if (m < 60) return `${m} min atrás`;
+    const h = Math.floor(m/60);
+    return `${h} h atrás`;
+  }
 
-    const normalized = [];
+  function isOnline(lastSeenIso){
+    const t = parseIso(lastSeenIso);
+    if (t === null) return false;
+    return (Date.now() - t) <= 120000; // 120s
+  }
 
-    if (workersObj && Array.isArray(workersObj)) {
-      for (let i=0;i<workersObj.length;i++){
-        normalized.push(normalizeWorker(String(i+1), workersObj[i]));
-      }
-    } else if (workersObj && typeof workersObj === "object") {
-      for (const id in workersObj){
-        normalized.push(normalizeWorker(id, workersObj[id]));
-      }
-    }
-
-    if (normalized.length === 0){
-      // fallback: exibe alguns campos do próprio data
-      const hr = pick(data, ["hashrate","hashRate","khs"]);
-      const ls = pick(data, ["lastSeen","last_seen","lastSeenHuman"]);
-      const up = pick(data, ["uptime","uptimeHuman","timeMining"]);
-      const bd = pick(data, ["bestDifficulty","best_difficulty","bestDiff","best"]);
-      els.workersWrap.innerHTML = `
-        <div class="item">
-          <div class="title">Resumo</div>
-          <div class="cols">
-            <div><div class="k">Hashrate</div><div class="v">${hr !== undefined ? fmtNum(hr)+" KH/s" : "—"}</div></div>
-            <div><div class="k">Last seen</div><div class="v">${ls ?? "—"}</div></div>
-            <div><div class="k">Uptime</div><div class="v">${up ?? "—"}</div></div>
-            <div><div class="k">Best diff</div><div class="v">${bd ?? "—"}</div></div>
-          </div>
-          <div class="small" style="margin-top:8px">
-            A API não retornou lista de workers/sessões nesse formato.
-            Se quiser, me mande o JSON (pode ocultar partes) que eu adapto.
-          </div>
-        </div>
-      `;
-      return;
-    }
-
-    // Ordena: maior hashrate primeiro
-    normalized.sort((a,b)=>(Number(b.hashrate)||0)-(Number(a.hashrate)||0));
-
-    // Preenche cards e também os KPIs (usando o primeiro worker “mais ativo”)
-    const mainW = normalized[0];
-    if (mainW && mainW.hashrate !== undefined) els.hashrate.textContent = `${fmtNum(mainW.hashrate)} KH/s`;
-    if (mainW && mainW.lastSeen) els.lastseen.textContent = String(mainW.lastSeen);
-    if (mainW && mainW.uptime) els.uptime.textContent = String(mainW.uptime);
-
-    for (const w of normalized){
-      const item = document.createElement("div");
-      item.className = "item";
-      item.innerHTML = `
-        <div class="title">Worker/Sessão: ${w.id}</div>
-        <div class="cols">
-          <div><div class="k">Hashrate</div><div class="v">${w.hashrate !== undefined ? fmtNum(w.hashrate)+" KH/s" : "—"}</div></div>
-          <div><div class="k">Shares</div><div class="v">${w.shares !== undefined ? fmtNum(w.shares) : "—"}</div></div>
-          <div><div class="k">Uptime</div><div class="v">${w.uptime ?? "—"}</div></div>
-          <div><div class="k">Last seen</div><div class="v">${w.lastSeen ?? "—"}</div></div>
-        </div>
-      `;
-      els.workersWrap.appendChild(item);
-    }
+  function calcMHashes(hs, startIso){
+    const nHs = toNum(hs);
+    const start = parseIso(startIso);
+    if (nHs === null || start === null) return null;
+    const seconds = (Date.now() - start) / 1000;
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+    // total hashes = H/s * s ; MHashes = hashes / 1e6
+    return (nHs * seconds) / 1e6;
   }
 
   async function refresh(){
@@ -199,34 +183,74 @@
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
-      // KPIs de nível “raiz”
-      const bestDiff = pick(data, ["bestDifficulty","best_difficulty","bestDiff","best"]);
-      if (bestDiff !== undefined) els.bestdiff.textContent = String(bestDiff);
+      // Best difficulty (raiz)
+      els.bestdiff.textContent = data.bestDifficulty ?? "—";
 
-      // tenta preencher hashrate/lastseen/uptime pelos campos raiz caso existam
-      const rootHashrate = pick(data, ["hashrate","hashRate","khs","kh_s","hashrate_khs"]);
-      const rootLastSeen = pick(data, ["lastSeen","last_seen","lastSeenHuman","last_seen_human","seen","last"]);
-      const rootUptime   = pick(data, ["uptime","uptimeHuman","timeMining","time_mining","sessionUptime"]);
+      // Workers count
+      els.workersCount.textContent = data.workersCount ?? (Array.isArray(data.workers) ? data.workers.length : "—");
 
-      if (rootHashrate !== undefined) els.hashrate.textContent = `${fmtNum(rootHashrate)} KH/s`;
-      if (rootLastSeen) els.lastseen.textContent = String(rootLastSeen);
-      if (rootUptime) els.uptime.textContent = String(rootUptime);
+      // Valid blocks: API não entrega -> manter N/D (mas em evidência)
+      els.validBlocks.textContent = "0 (N/D via API)";
+      // Nota honesta: isso NÃO detecta bloco encontrado. Se quiser detecção, precisaremos de outro endpoint do pool.
 
-      renderWorkers(data);
+      // Pega o worker principal (primeiro)
+      const w = Array.isArray(data.workers) && data.workers.length ? data.workers[0] : null;
 
-      // Status (online se hashrate > 0 ou lastSeen “agora”)
-      const hr = Number(pick(data, ["hashrate","hashRate","khs"]) ?? 0);
-      const ls = rootLastSeen ?? els.lastseen.textContent;
-      if ((!Number.isNaN(hr) && hr > 0) || looksOnlineFromLastSeen(ls)) setStatus("ok", "Online (minerando)");
-      else setStatus("warn", "Dados recebidos (hashrate 0?)");
+      if (!w){
+        els.hashrate.textContent = "—";
+        els.avgHashrate.textContent = "—";
+        els.uptime.textContent = "—";
+        els.mhashes.textContent = "—";
+        els.lastseen.textContent = "—";
+        els.workersWrap.innerHTML = `<div class="small">Nenhum worker retornado pela API.</div>`;
+        setStatus("warn", "Sem workers");
+        return;
+      }
+
+      // Hashrate atual
+      els.hashrate.textContent = formatHashrateFromHs(w.hashRate);
+
+      // Tempo minerando (sessão): agora - startTime
+      const startMs = parseIso(w.startTime);
+      const upMs = startMs ? (Date.now() - startMs) : null;
+      els.uptime.textContent = upMs !== null ? msToHms(upMs) : "—";
+
+      // Last seen
+      els.lastseen.textContent = `${new Date(w.lastSeen).toLocaleString()} (${relativeFromIso(w.lastSeen)})`;
+
+      // Total MHashes estimado
+      const mh = calcMHashes(w.hashRate, w.startTime);
+      els.mhashes.textContent = (mh !== null) ? mh.toLocaleString("pt-BR", { maximumFractionDigits: 2 }) : "—";
+
+      // Avg hashrate (sessão): com apenas 1 amostra, a melhor estimativa é o hashrate atual.
+      // (Para média real, precisaríamos armazenar histórico no browser ou ter API que entregue média.)
+      const khs = hsToKhsNumber(w.hashRate);
+      els.avgHashrate.textContent = (khs !== null) ? `${khs.toFixed(1)} KH/s` : "—";
+
+      // Render workers list
+      els.workersWrap.innerHTML = "";
+      for (const ww of data.workers){
+        const item = document.createElement("div");
+        item.className = "item";
+        item.innerHTML = `
+          <div class="title">${ww.name ?? "worker"} — sessão ${ww.sessionId ?? "-"}</div>
+          <div class="cols">
+            <div><div class="k">Hashrate</div><div class="v">${formatHashrateFromHs(ww.hashRate)}</div></div>
+            <div><div class="k">Best diff (sessão)</div><div class="v">${ww.bestDifficulty ?? "—"}</div></div>
+            <div><div class="k">Start</div><div class="v">${ww.startTime ? new Date(ww.startTime).toLocaleString() : "—"}</div></div>
+            <div><div class="k">Last seen</div><div class="v">${ww.lastSeen ? relativeFromIso(ww.lastSeen) : "—"}</div></div>
+          </div>
+        `;
+        els.workersWrap.appendChild(item);
+      }
+
+      // Status online/offline
+      if (isOnline(w.lastSeen)) setStatus("ok", "Online (minerando)");
+      else setStatus("bad", "Offline (sem last seen recente)");
 
     }catch(e){
       setStatus("bad", "Falha ao buscar dados");
-      els.workersWrap.innerHTML = `<div class="small">Erro: ${e.message}. Se for CORS, use proxy na Hostinger.</div>`;
-      els.hashrate.textContent = "—";
-      els.lastseen.textContent = "—";
-      els.bestdiff.textContent = "—";
-      els.uptime.textContent = "—";
+      els.workersWrap.innerHTML = `<div class="small">Erro: ${e.message}</div>`;
     }
   }
 
