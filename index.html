@@ -1,2 +1,36 @@
-<h1>NerdMiner Dashboard</h1>
-<p>Funcionando!</p>
+<!DOCTYPE html>
+<html>
+<head>
+  <title>NerdMiner Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+<h2>NerdMiner Dashboard</h2>
+
+<div id="data">Carregando...</div>
+
+<script>
+const wallet = "bc1q26ewxzrujkhz8tyazxtxdlcu4amduam6xgl78vI";
+
+async function loadData() {
+  try {
+    const res = await fetch(
+      "https://web.public-pool.io/api/worker/" + wallet
+    );
+    const json = await res.json();
+
+    document.getElementById("data").innerHTML = `
+      Hashrate: ${json.hashrate} KH/s<br>
+      Best difficulty: ${json.bestDifficulty}<br>
+      Workers: ${json.workers}<br>
+    `;
+  } catch(e) {
+    document.getElementById("data").innerHTML = "Erro carregando dados...";
+  }
+}
+
+setInterval(loadData, 5000);
+loadData();
+</script>
+</body>
+</html>
