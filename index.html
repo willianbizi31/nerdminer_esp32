@@ -1,36 +1,177 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="pt-br">
 <head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>NerdMiner Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    :root{--bg:#0b1220;--card:#111b2e;--text:#e9eefc;--muted:#a9b3cf;--ok:#39d98a;--bad:#ff5c5c;--warn:#ffcc00}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:var(--bg);color:var(--text)}
+    .wrap{max-width:980px;margin:0 auto;padding:18px}
+    h1{font-size:22px;margin:0 0 8px}
+    .sub{color:var(--muted);font-size:13px;margin-bottom:14px;word-break:break-all}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    @media(min-width:860px){.grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+    .card{background:var(--card);border-radius:16px;padding:14px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+    .k{color:var(--muted);font-size:12px}
+    .v{font-size:20px;font-weight:750;margin-top:6px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+    .pill{display:inline-flex;gap:8px;align-items:center;background:rgba(255,255,255,.06);border-radius:999px;padding:7px 10px;font-size:13px}
+    .dot{width:10px;height:10px;border-radius:50%}
+    .ok{background:var(--ok)} .bad{background:var(--bad)} .warn{background:var(--warn)}
+    .small{font-size:12px;color:var(--muted)}
+    button{background:#1b2a47;color:var(--text);border:0;border-radius:12px;padding:10px 12px;font-weight:600}
+    button:active{transform:translateY(1px)}
+    code{background:rgba(255,255,255,.08);padding:2px 6px;border-radius:8px}
+    .footer{margin-top:14px;color:var(--muted);font-size:12px;line-height:1.4}
+  </style>
 </head>
 <body>
-<h2>NerdMiner Dashboard</h2>
+  <div class="wrap">
+    <h1>NerdMiner Dashboard</h1>
+    <div class="sub">Wallet: <code id="wallet"></code></div>
 
-<div id="data">Carregando...</div>
+    <div class="row">
+      <div class="pill"><span class="dot" id="dot"></span><span id="status">Carregando…</span></div>
+      <div class="pill">Atualiza: <span id="tick">—</span>s</div>
+      <button id="refresh">Atualizar agora</button>
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div class="card"><div class="k">Hashrate</div><div class="v" id="hashrate">—</div></div>
+      <div class="card"><div class="k">Last seen</div><div class="v" id="lastseen">—</div></div>
+      <div class="card"><div class="k">Best difficulty</div><div class="v" id="bestdiff">—</div></div>
+      <div class="card"><div class="k">Uptime (sessão)</div><div class="v" id="uptime">—</div></div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="k">Detalhes (depende do que a API retorna)</div>
+      <div class="row" id="details" style="margin-top:10px"></div>
+      <div class="footer">
+        Obs: “tempo real” aqui depende do pool (normal ter atraso de alguns segundos).
+      </div>
+    </div>
+  </div>
 
 <script>
-const wallet = "bc1q26ewxzrujkhz8tyazxtxdlcu4amduam6xgl78vI";
+  const WALLET = "bc1q26ewxzrujkhz8tyazxtxdlcu4amduam6xgl78v";
+  const DIRECT_API = `https://public-pool.io:40557/api/client/${WALLET}`;
 
-async function loadData() {
-  try {
-    const res = await fetch(
-      "https://web.public-pool.io/api/worker/" + wallet
-    );
-    const json = await res.json();
+  // Se você usar proxy (Hostinger), troque para:
+  // const API = `https://SEU-DOMINIO.com/pproxy.php?wallet=${encodeURIComponent(WALLET)}`;
+  const API = DIRECT_API;
 
-    document.getElementById("data").innerHTML = `
-      Hashrate: ${json.hashrate} KH/s<br>
-      Best difficulty: ${json.bestDifficulty}<br>
-      Workers: ${json.workers}<br>
-    `;
-  } catch(e) {
-    document.getElementById("data").innerHTML = "Erro carregando dados...";
+  document.getElementById("wallet").textContent = WALLET;
+
+  const els = {
+    dot: document.getElementById("dot"),
+    status: document.getElementById("status"),
+    tick: document.getElementById("tick"),
+    hashrate: document.getElementById("hashrate"),
+    lastseen: document.getElementById("lastseen"),
+    bestdiff: document.getElementById("bestdiff"),
+    uptime: document.getElementById("uptime"),
+    details: document.getElementById("details"),
+  };
+
+  function setStatus(kind, text){
+    els.dot.className = "dot " + kind;
+    els.status.textContent = text;
   }
-}
 
-setInterval(loadData, 5000);
-loadData();
+  function fmtNum(n){
+    if (n === null || n === undefined) return "—";
+    const x = Number(n);
+    if (Number.isNaN(x)) return String(n);
+    return x.toLocaleString("pt-BR");
+  }
+
+  // tenta achar campos prováveis na resposta (a API pode variar)
+  function pick(obj, keys){
+    for (const k of keys){
+      if (obj && obj[k] !== undefined && obj[k] !== null) return obj[k];
+    }
+    return undefined;
+  }
+
+  function renderDetails(obj){
+    els.details.innerHTML = "";
+    const items = [];
+
+    // candidatos comuns
+    const candidates = [
+      ["Workers", ["workers","workerCount","clients","miners"]],
+      ["Shares", ["shares","validShares","completedShares","acceptedShares"]],
+      ["32-bit shares", ["shares32","shares_32","shares32bit"]],
+      ["Total MHashes", ["totalMHashes","mhashes","totalMhashes","total_hashes"]],
+      ["Block templates", ["blockTemplates","templates","block_templates"]],
+      ["Valid blocks", ["validBlocks","blocks","valid_blocks"]],
+      ["Temperatura", ["temp","temperature","tempC","temperatureC"]],
+      ["Sessões", ["sessions","sessionCount"]],
+    ];
+
+    for (const [label, keys] of candidates){
+      const v = pick(obj, keys);
+      if (v !== undefined){
+        items.push(`${label}: <b>${fmtNum(v)}</b>`);
+      }
+    }
+
+    if (items.length === 0){
+      els.details.innerHTML = `<span class="small">A API retornou dados, mas os nomes dos campos são diferentes. Se você colar aqui o JSON (pode ocultar), eu ajusto os campos.</span>`;
+      return;
+    }
+
+    for (const html of items){
+      const div = document.createElement("div");
+      div.className = "pill";
+      div.innerHTML = html;
+      els.details.appendChild(div);
+    }
+  }
+
+  async function refresh(){
+    try{
+      setStatus("warn", "Atualizando…");
+      const res = await fetch(API, { cache: "no-store" });
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      // Campos principais (tentativas)
+      const hashrate = pick(data, ["hashrate","hashRate","khs","kh_s","hashrate_khs"]);
+      const lastSeen = pick(data, ["lastSeen","last_seen","lastSeenHuman","last_seen_human","seen","last"]);
+      const bestDiff = pick(data, ["bestDifficulty","best_difficulty","bestDiff","best"]);
+      const uptime = pick(data, ["uptime","uptimeHuman","timeMining","time_mining","sessionUptime","uptime_seconds"]);
+
+      els.hashrate.textContent = (hashrate !== undefined ? `${fmtNum(hashrate)} KH/s` : "—");
+      els.lastseen.textContent = (lastSeen !== undefined ? String(lastSeen) : "—");
+      els.bestdiff.textContent = (bestDiff !== undefined ? String(bestDiff) : "—");
+      els.uptime.textContent = (uptime !== undefined ? String(uptime) : "—");
+
+      // Status online/offline (heurística: se tem lastSeen “now/seconds” ou hashrate > 0)
+      const hr = Number(hashrate);
+      if (!Number.isNaN(hr) && hr > 0) setStatus("ok", "Online (minerando)");
+      else setStatus("warn", "Dados recebidos (hashrate 0?)");
+
+      renderDetails(data);
+    }catch(e){
+      setStatus("bad", "Falha ao buscar dados");
+      els.details.innerHTML = `<span class="small">Erro: ${e.message}. Se isso for CORS, use o proxy (abaixo).</span>`;
+      els.hashrate.textContent = "—";
+      els.lastseen.textContent = "—";
+      els.bestdiff.textContent = "—";
+      els.uptime.textContent = "—";
+    }
+  }
+
+  // contador visual
+  let t = 0;
+  setInterval(()=>{ t = (t+1)%1000; els.tick.textContent = t; }, 1000);
+
+  document.getElementById("refresh").addEventListener("click", ()=>{ t=0; refresh(); });
+
+  refresh();
+  setInterval(refresh, 5000);
 </script>
 </body>
 </html>
